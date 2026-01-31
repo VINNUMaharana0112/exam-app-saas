@@ -3,18 +3,29 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import time
 import os
-import json
 
-# --- 1. HYBRID CONNECTION FUNCTION (Local & Cloud) ---
+# --- 1. ROBUST CONNECTION FUNCTION ---
 @st.cache_resource
 def get_db():
     if not firebase_admin._apps:
-        # A. Try Local File
+        # A. Local Mode
         if os.path.exists('serviceAccountKey.json'):
             cred = credentials.Certificate('serviceAccountKey.json')
-        # B. Try Secrets
+        
+        # B. Cloud Mode
         else:
-            key_dict = json.loads(st.secrets["FIREBASE_KEY"])
+            key_dict = {
+                "type": st.secrets["firebase"]["type"],
+                "project_id": st.secrets["firebase"]["project_id"],
+                "private_key_id": st.secrets["firebase"]["private_key_id"],
+                "private_key": st.secrets["firebase"]["private_key"].replace('\\n', '\n'),
+                "client_email": st.secrets["firebase"]["client_email"],
+                "client_id": st.secrets["firebase"]["client_id"],
+                "auth_uri": st.secrets["firebase"]["auth_uri"],
+                "token_uri": st.secrets["firebase"]["token_uri"],
+                "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
+            }
             cred = credentials.Certificate(key_dict)
 
         firebase_admin.initialize_app(cred)
@@ -23,7 +34,7 @@ def get_db():
 try:
     db = get_db()
 except Exception as e:
-    st.error("System Error: Could not connect to Exam Database.")
+    st.error(f"❌ Connection Error: {e}")
     st.stop()
 
 # --- 2. CONFIGURATION & STATE ---
@@ -42,7 +53,6 @@ with st.sidebar:
     
     st.divider()
     st.header("⚙️ Exam Settings")
-    # In a real app, these would be locked/hidden
     selected_topic = st.text_input("Enter Subject Code (Topic)", "Physics")
     exam_duration = st.number_input("Duration (Minutes)", value=30, min_value=5)
     
@@ -58,7 +68,7 @@ with st.sidebar:
 # --- 4. EXAM HALL ---
 if st.session_state['exam_started']:
     
-    # TIMER LOGIC
+    # TIMER
     elapsed = time.time() - st.session_state['start_time']
     remaining = (exam_duration * 60) - elapsed
     
@@ -72,7 +82,7 @@ if st.session_state['exam_started']:
 
     st.divider()
     
-    # FETCH QUESTIONS
+    # QUESTIONS
     docs = db.collection('questions').where('topic', '==', selected_topic).stream()
     questions = list(docs)
     
@@ -86,22 +96,17 @@ if st.session_state['exam_started']:
                 q = doc.to_dict()
                 q_id = doc.id
                 
-                # Question Header
                 st.markdown(f"**Q{i}. {q.get('text')}** *({q.get('marks')} Marks)*")
                 
-                # Render LaTeX
                 if "$" in q.get('text', ''):
                     st.latex(q.get('text').replace('$', ''))
                 
-                # Render Image (ImgBB)
                 if q.get('image_url'):
                     st.image(q.get('image_url'), caption="Reference Figure")
 
-                # Render Video
                 if q.get('video_url'):
                     st.markdown(f"🎥 [Watch Video Reference]({q.get('video_url')})")
 
-                # Answer Input
                 if q.get('type') == 'MCQ':
                     options = q.get('options', [])
                     st.radio(f"Select Answer for Q{i}", options, key=q_id)
@@ -110,18 +115,10 @@ if st.session_state['exam_started']:
                 
                 st.markdown("---")
             
-            # SUBMIT
             if st.form_submit_button("🏁 Submit Exam"):
                 st.balloons()
                 st.success(f"Exam Submitted by {name} ({roll_no})!")
-                # Here you would save answers to Firebase 'submissions' collection
+
 else:
-    # LANDING PAGE
     st.title("🎓 Online Examination Portal")
     st.info("👈 Please Login from the Sidebar to start your test.")
-    st.markdown("""
-    **Instructions:**
-    1. Ensure stable internet connection.
-    2. Do not refresh the page once the exam starts.
-    3. Keep an eye on the timer at the top.
-    """)
