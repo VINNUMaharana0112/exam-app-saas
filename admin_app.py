@@ -5,23 +5,35 @@ import requests
 import base64
 from fpdf import FPDF
 import os
-import json
 
 # --- CONFIGURATION ---
-# PASTE YOUR IMGBB API KEY HERE
+# ⚠️ PASTE YOUR IMGBB KEY HERE BEFORE UPLOADING TO GITHUB
 IMGBB_API_KEY = '2f8f92e37c4b9b9efc7279b226f648a0' 
 
-# --- 1. HYBRID CONNECTION FUNCTION (Local & Cloud) ---
+# --- 1. ROBUST CONNECTION FUNCTION ---
 @st.cache_resource
 def get_db():
     if not firebase_admin._apps:
-        # A. Try Local File (For your Laptop)
+        # A. Local Mode (Laptop)
         if os.path.exists('serviceAccountKey.json'):
             cred = credentials.Certificate('serviceAccountKey.json')
-        # B. Try Secrets (For Streamlit Cloud)
+        
+        # B. Cloud Mode (Streamlit Secrets)
         else:
-            # We parse the secret JSON string back into a dictionary
-            key_dict = json.loads(st.secrets["FIREBASE_KEY"])
+            # We access the "firebase" section you defined in Secrets
+            key_dict = {
+                "type": st.secrets["firebase"]["type"],
+                "project_id": st.secrets["firebase"]["project_id"],
+                "private_key_id": st.secrets["firebase"]["private_key_id"],
+                # Vital Fix: Replace escaped newlines with real newlines
+                "private_key": st.secrets["firebase"]["private_key"].replace('\\n', '\n'),
+                "client_email": st.secrets["firebase"]["client_email"],
+                "client_id": st.secrets["firebase"]["client_id"],
+                "auth_uri": st.secrets["firebase"]["auth_uri"],
+                "token_uri": st.secrets["firebase"]["token_uri"],
+                "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
+            }
             cred = credentials.Certificate(key_dict)
 
         firebase_admin.initialize_app(cred)
@@ -30,13 +42,12 @@ def get_db():
 try:
     db = get_db()
 except Exception as e:
-    st.error(f"Database Connection Failed: {e}")
+    st.error(f"❌ Database Connection Error: {e}")
     st.stop()
 
 # --- 2. HELPER FUNCTIONS ---
 
 def upload_to_imgbb(file_obj):
-    """Uploads image to ImgBB and returns public URL"""
     if not file_obj:
         return None
     try:
@@ -56,7 +67,6 @@ def upload_to_imgbb(file_obj):
         return None
 
 def generate_pdf(questions_list, exam_title):
-    """Generates a printable PDF from the question list"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -71,10 +81,9 @@ def generate_pdf(questions_list, exam_title):
     # Questions
     pdf.set_font("Arial", size=11)
     for i, q in enumerate(questions_list, 1):
-        # Clean text for PDF (handle basic encoding)
         q_text = f"Q{i}. {q.get('text', '')}   [{q.get('marks')} Marks]"
+        # Handle encoding
         q_text = q_text.encode('latin-1', 'replace').decode('latin-1')
-        
         pdf.multi_cell(0, 7, txt=q_text)
         
         if q.get('type') == 'MCQ':
@@ -87,11 +96,10 @@ def generate_pdf(questions_list, exam_title):
 
     return pdf.output(dest='S').encode('latin-1')
 
-# --- 3. APP INTERFACE ---
+# --- 3. UI ---
 st.set_page_config(page_title="Master Admin Panel", layout="wide")
 st.title("🎓 Exam Controller: Question Bank")
 
-# --- TAB 1: ADD QUESTION ---
 tab1, tab2 = st.tabs(["➕ Add Question", "🖨️ Generate PDF"])
 
 with tab1:
@@ -102,7 +110,7 @@ with tab1:
         marks = c3.number_input("Marks", min_value=1, value=4)
 
         q_type = st.radio("Question Type", ["MCQ", "Long Answer"], horizontal=True)
-        st.info("💡 Tip: Use LaTeX for Math. Example: `$\int x^2 dx$`")
+        st.info("💡 Use LaTeX for Math: `$\int x^2 dx$`")
         question_text = st.text_area("Question Text", height=150)
         
         c4, c5 = st.columns(2)
@@ -128,12 +136,10 @@ with tab1:
                 st.error("Topic and Question Text are required.")
             else:
                 with st.spinner("Processing..."):
-                    # Upload Image
                     image_url = None
                     if uploaded_img:
                         image_url = upload_to_imgbb(uploaded_img)
                     
-                    # Save to DB
                     question_data = {
                         "topic": topic,
                         "difficulty": difficulty,
@@ -149,7 +155,6 @@ with tab1:
                     db.collection("questions").add(question_data)
                     st.success("✅ Saved Successfully!")
 
-# --- TAB 2: GENERATE PDF ---
 with tab2:
     st.subheader("Offline Exam Paper Generator")
     col_p1, col_p2 = st.columns(2)
@@ -165,18 +170,8 @@ with tab2:
         else:
             pdf_bytes = generate_pdf(q_list, pdf_title)
             st.download_button(
-                label="📥 Download PDF Question Paper",
+                label="📥 Download PDF",
                 data=pdf_bytes,
                 file_name=f"{pdf_topic}_Exam.pdf",
                 mime="application/pdf"
             )
-
-# --- PREVIEW FOOTER ---
-st.divider()
-st.caption("Recent Database Entries:")
-recent_docs = db.collection("questions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(3).stream()
-for doc in recent_docs:
-    q = doc.to_dict()
-    with st.expander(f"{q.get('topic')} - {q.get('type')}"):
-        st.write(q.get('text'))
-        if q.get('image_url'): st.image(q.get('image_url'), width=200)
